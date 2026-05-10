@@ -16,14 +16,11 @@ typedef struct {
     bool recursive;
 } Options;
 
-/* Forward declarations */
 static void list_dir(const char *path, const Options *opts, int depth);
 static int  compare_entries(const void *a, const void *b);
 static char *join_path(const char *dir, const char *name);
 static void  parse_flags(const char *arg, Options *opts);
 static void  usage(const char *progname);
-
-/* ------------------------------------------------------------------ */
 
 int main(int argc, char **argv)
 {
@@ -63,8 +60,6 @@ int main(int argc, char **argv)
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-
 static void parse_flags(const char *flags, Options *opts)
 {
     for (; *flags; flags++) {
@@ -83,12 +78,6 @@ static void usage(const char *progname)
     fprintf(stderr, "Usage: %s [-aR] [directory ...]\n", progname);
 }
 
-/* ------------------------------------------------------------------ */
-
-/*
- * Collect all entries from `path`, sort them, print them, then
- * recurse into subdirectories if requested.
- */
 static void list_dir(const char *path, const Options *opts, int depth)
 {
     DIR *dir = opendir(path);
@@ -97,7 +86,6 @@ static void list_dir(const char *path, const Options *opts, int depth)
         return;
     }
 
-    /* --- collect entries ------------------------------------------ */
     struct dirent **entries = NULL;
     int             count   = 0;
 
@@ -120,10 +108,8 @@ static void list_dir(const char *path, const Options *opts, int depth)
 
     closedir(dir);
 
-    /* --- sort ------------------------------------------------------ */
     qsort(entries, count, sizeof(*entries), compare_entries);
 
-    /* --- print & collect subdirs ----------------------------------- */
     const char **subdirs = NULL;
     int          nsub    = 0;
 
@@ -132,8 +118,6 @@ static void list_dir(const char *path, const Options *opts, int depth)
         bool        hidden = (name[0] == '.');
 
         if (!hidden || opts->show_all) {
-            /* Determine type with stat() so we aren't relying on d_type
-             * being set (some filesystems leave it as DT_UNKNOWN).       */
             char *full = join_path(path, name);
             struct stat st;
             bool is_dir = (full && stat(full, &st) == 0 && S_ISDIR(st.st_mode));
@@ -141,7 +125,6 @@ static void list_dir(const char *path, const Options *opts, int depth)
             if (is_dir) {
                 printf(COLOR_BLUE "\t%s" COLOR_RESET "\n", name);
 
-                /* Queue non-. non-.. subdirs for recursion. */
                 if (opts->recursive &&
                     !(strcmp(name, ".") == 0 || strcmp(name, "..") == 0)) {
                     char **tmp = realloc(subdirs, (nsub + 1) * sizeof(char *));
@@ -162,7 +145,6 @@ static void list_dir(const char *path, const Options *opts, int depth)
     }
     free(entries);
 
-    /* --- recurse --------------------------------------------------- */
     for (int i = 0; i < nsub; i++) {
         printf("\n%s:\n", subdirs[i]);
         list_dir(subdirs[i], opts, depth + 1);
@@ -170,8 +152,6 @@ static void list_dir(const char *path, const Options *opts, int depth)
     }
     free(subdirs);
 }
-
-/* ------------------------------------------------------------------ */
 
 static int compare_entries(const void *a, const void *b)
 {
