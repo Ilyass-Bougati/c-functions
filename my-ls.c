@@ -4,184 +4,192 @@
 #include <stdbool.h>
 #include <errno.h>
 #include <dirent.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 
-#define BLUE "\x1b[34m"
-#define GREEN "\x1b[32m"
-#define RESET "\x1b[0m"
+#define COLOR_BLUE  "\x1b[34m"
+#define COLOR_GREEN "\x1b[32m"
+#define COLOR_RESET "\x1b[0m"
 
-bool SHOW_ALL = false;
-bool RECURSIVE = false;
+typedef struct {
+    bool show_all;
+    bool recursive;
+} Options;
 
-void print_dir_rec(char *);
-void print_dir(char *);
-bool contains(char *, char);
+/* Forward declarations */
+static void list_dir(const char *path, const Options *opts, int depth);
+static int  compare_entries(const void *a, const void *b);
+static char *join_path(const char *dir, const char *name);
+static void  parse_flags(const char *arg, Options *opts);
+static void  usage(const char *progname);
+
+/* ------------------------------------------------------------------ */
 
 int main(int argc, char **argv)
 {
-    if (argc == 1)
-    {
-        print_dir(".");
-        return 0;
+    Options opts = { .show_all = false, .recursive = false };
+
+    /* Collect paths and parse flags (flags may appear anywhere). */
+    const char **paths  = malloc(argc * sizeof(char *));
+    int          npath  = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            if (argv[i][1] == '\0') {
+                fprintf(stderr, "Unknown flag: -\n");
+                usage(argv[0]);
+                free(paths);
+                return 1;
+            }
+            parse_flags(argv[i] + 1, &opts);
+        } else {
+            paths[npath++] = argv[i];
+        }
     }
-    else
-    {
-        int directory_end_index = argv[argc - 1][0] == '-' ? argc - 1 : argc;
 
-        if (directory_end_index != argc)
-        {
-            if (contains(argv[argc - 1], 'a'))
-            {
-                SHOW_ALL = true;
-            }
-            if (contains(argv[argc - 1], 'R'))
-            {
-                RECURSIVE = true;
-            }
+    if (npath == 0) {
+        list_dir(".", &opts, 0);
+    } else {
+        for (int i = 0; i < npath; i++) {
+            if (npath > 1)
+                printf("%s:\n", paths[i]);
+            list_dir(paths[i], &opts, 0);
+            if (npath > 1 && i + 1 < npath)
+                putchar('\n');
         }
+    }
 
-        for (int i = 1; i < directory_end_index; i++)
-        {
-            printf("directory : %s\n", argv[i]);
-            if (RECURSIVE)
-            {
-                print_dir_rec(argv[i]);
-            }
-            else
-            {
-                print_dir(argv[i]);
-            }
-            printf("\n\n");
+    free(paths);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+
+static void parse_flags(const char *flags, Options *opts)
+{
+    for (; *flags; flags++) {
+        switch (*flags) {
+            case 'a': opts->show_all  = true; break;
+            case 'R': opts->recursive = true; break;
+            default:
+                fprintf(stderr, "Unknown flag: -%c\n", *flags);
+                break;
         }
-        return 0;
     }
 }
 
-bool contains(char *str, char c)
+static void usage(const char *progname)
 {
-    for (int i = 0; i < strlen(str); i++)
-    {
-        if (str[i] == c)
-            return true;
-    }
-    return false;
+    fprintf(stderr, "Usage: %s [-aR] [directory ...]\n", progname);
 }
 
-void print_dir(char *dir_name)
+/* ------------------------------------------------------------------ */
+
+/*
+ * Collect all entries from `path`, sort them, print them, then
+ * recurse into subdirectories if requested.
+ */
+static void list_dir(const char *path, const Options *opts, int depth)
 {
-    DIR *dir = opendir(dir_name);
-    if (dir == NULL)
-    {
-        if (errno != 0)
-        {
-            int saved_errno = errno;
-            fprintf(stdout, "%s\n", strerror(saved_errno));
-        }
+    DIR *dir = opendir(path);
+    if (dir == NULL) {
+        fprintf(stderr, "%s: %s\n", path, strerror(errno));
         return;
     }
-    int size = 0;
+
+    /* --- collect entries ------------------------------------------ */
     struct dirent **entries = NULL;
-    while (dir)
-    {
-        struct dirent *entry = readdir(dir);
-        if (entry == NULL)
-        {
-            if (errno != 0)
-            {
-                int saved_errno = errno;
-                fprintf(stdout, "%s\n", strerror(saved_errno));
-            }
-            closedir(dir);
-            goto print;
-        }
-        entries = realloc(entries, ++size * sizeof(struct dirent *));
-        entries[size - 1] = entry;
+    int             count   = 0;
+
+    errno = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        /* Copy the dirent so it remains valid after closedir(). */
+        struct dirent *copy = malloc(sizeof(struct dirent));
+        if (!copy) { perror("malloc"); break; }
+        *copy = *entry;
+
+        struct dirent **tmp = realloc(entries, (count + 1) * sizeof(*entries));
+        if (!tmp) { perror("realloc"); free(copy); break; }
+        entries = tmp;
+        entries[count++] = copy;
+        errno = 0;
     }
+    if (errno != 0)
+        fprintf(stderr, "%s: %s\n", path, strerror(errno));
+
     closedir(dir);
-    return;
 
-print:
-    for (int i = 0; i < size; i++)
-    {
-        if (entries[i]->d_type == 4)
-        { // 4 means directory, check dirent.h for other file types
-            if (entries[i]->d_name[0] == '.' && !SHOW_ALL)
-            {
-                continue;
-            }
-            printf(BLUE);
-        }
-        printf("\t%s%s\n", entries[i]->d_name, RESET);
-    }
-}
+    /* --- sort ------------------------------------------------------ */
+    qsort(entries, count, sizeof(*entries), compare_entries);
 
-void print_dir_rec(char *dir_name)
-{
-    DIR *dir = opendir(dir_name);
-    if (dir == NULL)
-    {
-        if (errno != 0)
-        {
-            int saved_errno = errno;
-            fprintf(stdout, "%s\n", strerror(saved_errno));
-        }
-        return;
-    }
-    int size = 0;
-    struct dirent **entries = NULL;
-    while (dir)
-    {
-        struct dirent *entry = readdir(dir);
-        if (entry == NULL)
-        {
-            if (errno != 0)
-            {
-                int saved_errno = errno;
-                fprintf(stdout, "%s\n", strerror(saved_errno));
-            }
-            closedir(dir);
-            goto print;
-        }
-        entries = realloc(entries, ++size * sizeof(struct dirent *));
-        entries[size - 1] = entry;
-    }
-    closedir(dir);
-    return;
+    /* --- print & collect subdirs ----------------------------------- */
+    const char **subdirs = NULL;
+    int          nsub    = 0;
 
-print:
-    struct dirent **directories = NULL;
-    int dir_size = 0;
-    for (int i = 0; i < size; i++)
-    {
-        if (entries[i]->d_type == 4)
-        { // 4 means directory, check dirent.h for other file types
-            if (!(strlen(entries[i]->d_name) == 1 && entries[i]->d_name[0] == '.' && entries[i]->d_name[1] == 0) && !(strlen(entries[i]->d_name) == 2 && entries[i]->d_name[0] == '.' && entries[i]->d_name[1] == '.' && entries[i]->d_name[2] == 0))
-            {
-                directories = realloc(directories, ++dir_size * sizeof(struct dirent *));
-                directories[dir_size - 1] = entries[i];
+    for (int i = 0; i < count; i++) {
+        const char *name   = entries[i]->d_name;
+        bool        hidden = (name[0] == '.');
+
+        if (!hidden || opts->show_all) {
+            /* Determine type with stat() so we aren't relying on d_type
+             * being set (some filesystems leave it as DT_UNKNOWN).       */
+            char *full = join_path(path, name);
+            struct stat st;
+            bool is_dir = (full && stat(full, &st) == 0 && S_ISDIR(st.st_mode));
+
+            if (is_dir) {
+                printf(COLOR_BLUE "\t%s" COLOR_RESET "\n", name);
+
+                /* Queue non-. non-.. subdirs for recursion. */
+                if (opts->recursive &&
+                    !(strcmp(name, ".") == 0 || strcmp(name, "..") == 0)) {
+                    char **tmp = realloc(subdirs, (nsub + 1) * sizeof(char *));
+                    if (tmp) {
+                        subdirs = (const char **)tmp;
+                        subdirs[nsub++] = full;
+                        full = NULL; /* ownership transferred */
+                    }
+                }
+            } else {
+                printf("\t%s\n", name);
             }
-            if (entries[i]->d_name[0] == '.' && !SHOW_ALL)
-            {
-                continue;
-            }
-            printf(BLUE);
+
+            free(full);
         }
-        printf("\t%s%s\n", entries[i]->d_name, RESET);
+
+        free(entries[i]);
     }
     free(entries);
-    if (dir_size == 0)
-    {
-        return;
-    }
-    for (int i = 0; i < dir_size; i++)
-    {
-        char *new_dir_name = malloc(strlen(dir_name) + strlen(directories[i]->d_name) + 2);
-        new_dir_name[0] = '\0';
-        strcat(new_dir_name, dir_name);
-        strcat(new_dir_name, "/");
-        strcat(new_dir_name, directories[i]->d_name);
-        printf("directory %s\n", new_dir_name);
 
-        print_dir_rec(new_dir_name);
+    /* --- recurse --------------------------------------------------- */
+    for (int i = 0; i < nsub; i++) {
+        printf("\n%s:\n", subdirs[i]);
+        list_dir(subdirs[i], opts, depth + 1);
+        free((void *)subdirs[i]);
     }
+    free(subdirs);
+}
+
+/* ------------------------------------------------------------------ */
+
+static int compare_entries(const void *a, const void *b)
+{
+    const struct dirent *da = *(const struct dirent **)a;
+    const struct dirent *db = *(const struct dirent **)b;
+    /* Case-insensitive sort, with hidden files sorted after visible ones
+     * (consistent with many ls implementations when -a is active).    */
+    const char *na = da->d_name + (da->d_name[0] == '.' ? 1 : 0);
+    const char *nb = db->d_name + (db->d_name[0] == '.' ? 1 : 0);
+    return strcasecmp(na, nb);
+}
+
+/* Returns a heap-allocated "dir/name" string; caller must free(). */
+static char *join_path(const char *dir, const char *name)
+{
+    size_t len = strlen(dir) + 1 + strlen(name) + 1;
+    char  *buf = malloc(len);
+    if (!buf) { perror("malloc"); return NULL; }
+    snprintf(buf, len, "%s/%s", dir, name);
+    return buf;
 }
